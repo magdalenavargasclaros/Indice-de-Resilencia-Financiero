@@ -1,0 +1,191 @@
+// =====================================================================
+//  ÍNDICE DE RESILIENCIA FINANCIERA IPSA 2017–2025
+//  1. CONSULTAS DE POWER QUERY (lenguaje M)
+// ---------------------------------------------------------------------
+//  Cómo usarlas
+//  1) Inicio > Transformar datos > Administrar parámetros > Nuevo parámetro
+//       Nombre: RutaModelo   Tipo: Texto
+//       Valor : la ruta completa de Modelo_PowerBI_IPSA.xlsx en tu equipo,
+//               p. ej. C:\TFM\PowerBI\Modelo_PowerBI_IPSA.xlsx
+//  2) Para cada bloque de abajo: Nuevo origen > Consulta en blanco >
+//     Editor avanzado > pega el bloque > ponle a la consulta el nombre
+//     indicado en su título (ese nombre es el que usan las medidas DAX).
+//  3) Cerrar y aplicar.
+//  Las hojas Control_Anual y Control_Indice NO se cargan: sirven para
+//  comprobar que Power BI da los mismos valores que el tablero web.
+// =====================================================================
+
+
+// ---------- Consulta: fnHoja  (función auxiliar, pegar primero) ----------
+// Lee una hoja del modelo y promueve la primera fila a encabezados.
+(nombreHoja as text) as table =>
+let
+    Libro  = Excel.Workbook(File.Contents(RutaModelo), null, true),
+    Hoja   = Libro{[Item = nombreHoja, Kind = "Sheet"]}[Data],
+    Tabla  = Table.PromoteHeaders(Hoja, [PromoteAllScalars = true])
+in
+    Tabla
+
+
+// ---------- Consulta: Dim_Empresa ----------
+let
+    Origen = fnHoja("Dim_Empresa"),
+    Tipos  = Table.TransformColumnTypes(Origen, {
+        {"Ticker", type text}, {"RazonSocial", type text}, {"Sector", type text},
+        {"SectorCorto", type text}, {"OrdenSector", Int64.Type}, {"Plantilla", type text},
+        {"Moneda", type text}, {"Precio2016", type number}, {"Observaciones", type text}})
+in
+    Tipos
+
+
+// ---------- Consulta: Dim_Anio ----------
+let
+    Origen = fnHoja("Dim_Anio"),
+    Tipos  = Table.TransformColumnTypes(Origen, {{"Anio", Int64.Type}, {"Ventana", type text}})
+in
+    Tipos
+
+
+// ---------- Consulta: Dim_Familia ----------
+let
+    Origen = fnHoja("Dim_Familia"),
+    Tipos  = Table.TransformColumnTypes(Origen, {
+        {"FamiliaID", type text}, {"Familia", type text}, {"Orden", Int64.Type},
+        {"Indicador_NoFin", type text}, {"Signo_NoFin", Int64.Type},
+        {"Indicador_Banco", type text}, {"Signo_Banco", Int64.Type},
+        {"PesoIgual_NoFin", type number}, {"PesoPCA_NoFin", type number},
+        {"PesoIgual_Banco", type number}, {"PesoPCA_Banco", type number}})
+in
+    Tipos
+
+
+// ---------- Consulta: Dim_Semaforo  (desconectada) ----------
+let
+    Origen = fnHoja("Dim_Semaforo"),
+    Tipos  = Table.TransformColumnTypes(Origen, {
+        {"Categoria", type text}, {"Orden", Int64.Type}, {"Regla", type text}, {"Color", type text}})
+in
+    Tipos
+
+
+// ---------- Consulta: Dim_Trayectoria  (desconectada) ----------
+let
+    Origen = fnHoja("Dim_Trayectoria"),
+    Tipos  = Table.TransformColumnTypes(Origen, {
+        {"Categoria", type text}, {"Orden", Int64.Type}, {"Regla", type text}, {"Color", type text}})
+in
+    Tipos
+
+
+// ---------- Consulta: F_Ratio ----------
+let
+    Origen = fnHoja("F_Ratio"),
+    Tipos  = Table.TransformColumnTypes(Origen, {
+        {"Ticker", type text}, {"Sector", type text}, {"Anio", Int64.Type},
+        {"FamiliaID", type text}, {"Valor", type number}, {"Z_Orientado", type number}})
+in
+    Tipos
+
+
+// ---------- Consulta: F_KPI ----------
+let
+    Origen = fnHoja("F_KPI"),
+    Tipos  = Table.TransformColumnTypes(Origen, {
+        {"Ticker", type text}, {"Anio", Int64.Type}, {"KPI", type number},
+        {"KPI_PCA", type number}, {"N_Familias", Int64.Type}})
+in
+    Tipos
+
+
+// ---------- Consulta: F_Dimensiones ----------
+let
+    Origen = fnHoja("F_Dimensiones"),
+    Tipos  = Table.TransformColumnTypes(Origen, {
+        {"Ticker", type text}, {"Sector", type text}, {"kpi_base", type number},
+        {"kpi_min_s1", type number}, {"anio_min_s1", Int64.Type}, {"resistencia_s1", type number},
+        {"recuperacion_s1", type number}, {"anios_recuperar_s1", type number},
+        {"kpi_min_s2", type number}, {"anio_min_s2", Int64.Type}, {"resistencia_s2", type number},
+        {"recuperacion_s2", type number}, {"anios_recuperar_s2", type number},
+        {"kpi_post", type number}, {"persistencia", type number}})
+in
+    Tipos
+
+
+// ---------- Consulta: F_Partida ----------
+let
+    Origen = fnHoja("F_Partida"),
+    Tipos  = Table.TransformColumnTypes(Origen, {
+        {"Ticker", type text}, {"Anio", Int64.Type}, {"Plantilla", type text}, {"Campo", type text},
+        {"Codigo", type text}, {"PartidaCMF", type text}, {"ElementoIFRS", type text},
+        {"Valor", type number}, {"Fuente", type text}})
+in
+    Tipos
+
+
+// ---------- Consulta: Puente_Ratio_Campo  (desconectada) ----------
+let
+    Origen = fnHoja("Puente_Ratio_Campo"),
+    Tipos  = Table.TransformColumnTypes(Origen, {
+        {"Plantilla", type text}, {"FamiliaID", type text}, {"Campo", type text},
+        {"Rol", type text}, {"Signo", Int64.Type}, {"Absoluto", type logical}})
+in
+    Tipos
+
+
+// ---------- Consulta: F_Bolsa_Mensual ----------
+let
+    Origen = fnHoja("F_Bolsa_Mensual"),
+    Tipos  = Table.TransformColumnTypes(Origen, {
+        {"Ticker", type text}, {"Fecha", type date}, {"Anio", Int64.Type}, {"Mes", Int64.Type},
+        {"PrecioAjustado", type number}, {"RetornoMensual", type number},
+        {"VolatilidadAnualizada", type number}, {"Drawdown", type number}, {"Base100", type number}})
+in
+    Tipos
+
+
+// =====================================================================
+//  OPCIONAL · F_Partida leída directamente de tu libro de la Fase 2
+// ---------------------------------------------------------------------
+//  Úsala en lugar de la consulta F_Partida de arriba si quieres que
+//  Power BI lea las partidas desde el archivo original de captura
+//  (más fuerte para argumentar la trazabilidad en la defensa).
+//  Requiere un segundo parámetro de texto: RutaFase2 =
+//  ruta de Fase2_Base_Contable_Anual_IPSA_CARGADA_.xlsx
+//  Produce exactamente las mismas columnas que F_Partida.
+// =====================================================================
+
+// ---------- Consulta: F_Partida  (versión desde la Fase 2) ----------
+let
+    Libro   = Excel.Workbook(File.Contents(RutaFase2), null, true),
+    Hoja    = (n as text) => Table.PromoteHeaders(Libro{[Item = n, Kind = "Sheet"]}[Data], [PromoteAllScalars = true]),
+    Fijas   = {"nemotecnico", "cod_sector", "sector", "anio", "moneda", "fuente", "observaciones"},
+    Largo   = (n as text, plantilla as text) =>
+        let
+            T  = Table.SelectRows(Hoja(n), each [nemotecnico] <> null and [anio] <> null),
+            U  = Table.UnpivotOtherColumns(T, Fijas, "Campo", "Valor"),
+            P  = Table.AddColumn(U, "Plantilla", each plantilla, type text)
+        in
+            P,
+    Unido   = Table.Combine({Largo("Captura_NoFin", "No financiera"), Largo("Captura_Fin", "Financiera")}),
+    // El precio viene de Yahoo Finance, no del estado financiero
+    Fuente  = Table.AddColumn(Unido, "Fuente", each if [Campo] = "precio_ajustado_cierre"
+                  then "Yahoo Finance, precio ajustado al cierre del año" else [fuente], type text),
+    // Diccionario: P = no financieras, B = bancos, M = mercado (ambas)
+    Dic0    = Table.SelectRows(Hoja("Diccionario"), each [#"Código"] <> null and [Campo] <> null),
+    Dic     = Table.AddColumn(Dic0, "PlantillaDic", each
+                  if Text.StartsWith([#"Código"], "B") then "Financiera"
+                  else if Text.StartsWith([#"Código"], "M") then "Ambas" else "No financiera", type text),
+    ClaveP  = Table.AddColumn(Fuente, "Clave", each (if [Campo] = "precio_ajustado_cierre" then "Ambas" else [Plantilla]) & "|" & [Campo], type text),
+    ClaveD  = Table.AddColumn(Dic, "Clave", each [PlantillaDic] & "|" & [Campo], type text),
+    Union   = Table.NestedJoin(ClaveP, {"Clave"}, ClaveD, {"Clave"}, "D", JoinKind.LeftOuter),
+    Expand  = Table.ExpandTableColumn(Union, "D",
+                  {"Código", "Partida en los EEFF (CMF)", "Elemento taxonomía IFRS"},
+                  {"Codigo", "PartidaCMF", "ElementoIFRS"}),
+    Sel     = Table.SelectColumns(Expand, {"nemotecnico", "anio", "Plantilla", "Campo", "Codigo", "PartidaCMF", "ElementoIFRS", "Valor", "Fuente"}),
+    Nombres = Table.RenameColumns(Sel, {{"nemotecnico", "Ticker"}, {"anio", "Anio"}}),
+    Tipos   = Table.TransformColumnTypes(Nombres, {
+        {"Ticker", type text}, {"Anio", Int64.Type}, {"Plantilla", type text}, {"Campo", type text},
+        {"Codigo", type text}, {"PartidaCMF", type text}, {"ElementoIFRS", type text},
+        {"Valor", type number}, {"Fuente", type text}})
+in
+    Tipos

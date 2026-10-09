@@ -1,0 +1,417 @@
+// =====================================================================
+//  ÍNDICE DE RESILIENCIA FINANCIERA IPSA 2017–2025
+//  2. MODELO, COLUMNAS CALCULADAS Y MEDIDAS DAX
+// ---------------------------------------------------------------------
+//  Orden de trabajo
+//  A) Crear las relaciones (vista Modelo).
+//  B) Crear las columnas calculadas, EN EL ORDEN en que aparecen
+//     (Herramientas de tabla > Nueva columna, en la tabla indicada).
+//  C) Crear una tabla vacía "_Medidas" (Inicio > Especificar datos >
+//     Cargar) y crear ahí todas las medidas (Nueva medida).
+//  D) Comprobar contra las hojas Control_Anual y Control_Indice.
+//  Las reglas son las mismas del tablero web y de tu metodología:
+//  winsorización P1/P99 y z dentro de cada sector con los nueve años
+//  agrupados; semáforo con z del KPI ≥ −1 / −1,5; trayectoria con la
+//  pendiente de 3 años y umbral ±0,10; índice = promedio de los z de
+//  las tres dimensiones entre las 22 empresas.
+// =====================================================================
+
+
+// =====================================================================
+//  A) RELACIONES  (todas de uno a varios, dirección de filtro: única)
+// ---------------------------------------------------------------------
+//  Dim_Empresa[Ticker]     1 → *  F_Ratio[Ticker]
+//  Dim_Empresa[Ticker]     1 → *  F_KPI[Ticker]
+//  Dim_Empresa[Ticker]     1 → *  F_Partida[Ticker]
+//  Dim_Empresa[Ticker]     1 → *  F_Bolsa_Mensual[Ticker]
+//  Dim_Empresa[Ticker]     1 → 1  F_Dimensiones[Ticker]   (si Power BI la
+//                                 marca "ambas direcciones", cámbiala a "única")
+//  Dim_Anio[Anio]          1 → *  F_Ratio[Anio]
+//  Dim_Anio[Anio]          1 → *  F_KPI[Anio]
+//  Dim_Anio[Anio]          1 → *  F_Partida[Anio]
+//  Dim_Anio[Anio]          1 → *  F_Bolsa_Mensual[Anio]
+//  Dim_Familia[FamiliaID]  1 → *  F_Ratio[FamiliaID]
+//  SIN relación: Dim_Semaforo, Dim_Trayectoria, Puente_Ratio_Campo.
+//  En los visuales usa siempre Dim_Empresa[Sector], no la columna Sector
+//  de las tablas de hechos.
+//  Ordenar por columna: Dim_Familia[Familia] por [Orden];
+//  Dim_Empresa[SectorCorto] por [OrdenSector]; Dim_Semaforo[Categoria]
+//  y Dim_Trayectoria[Categoria] por [Orden].
+// =====================================================================
+
+
+// =====================================================================
+//  B1) COLUMNAS CALCULADAS EN F_Ratio  (crear en este orden)
+//  Se usa ALL(columnas) en vez de la tabla completa para evitar
+//  dependencias circulares entre columnas calculadas.
+// =====================================================================
+
+P01 =
+VAR s = F_Ratio[Sector]
+VAR f = F_Ratio[FamiliaID]
+RETURN
+    PERCENTILEX.INC (
+        FILTER (
+            ALL ( F_Ratio[Ticker], F_Ratio[Anio], F_Ratio[Sector], F_Ratio[FamiliaID], F_Ratio[Valor] ),
+            F_Ratio[Sector] = s && F_Ratio[FamiliaID] = f
+        ),
+        F_Ratio[Valor], 0.01
+    )
+
+P99 =
+VAR s = F_Ratio[Sector]
+VAR f = F_Ratio[FamiliaID]
+RETURN
+    PERCENTILEX.INC (
+        FILTER (
+            ALL ( F_Ratio[Ticker], F_Ratio[Anio], F_Ratio[Sector], F_Ratio[FamiliaID], F_Ratio[Valor] ),
+            F_Ratio[Sector] = s && F_Ratio[FamiliaID] = f
+        ),
+        F_Ratio[Valor], 0.99
+    )
+
+Winsorizado =
+MIN ( MAX ( F_Ratio[Valor], F_Ratio[P01] ), F_Ratio[P99] )
+
+Media_Sector =
+VAR s = F_Ratio[Sector]
+VAR f = F_Ratio[FamiliaID]
+RETURN
+    AVERAGEX (
+        FILTER (
+            ALL ( F_Ratio[Ticker], F_Ratio[Anio], F_Ratio[Sector], F_Ratio[FamiliaID], F_Ratio[Winsorizado] ),
+            F_Ratio[Sector] = s && F_Ratio[FamiliaID] = f
+        ),
+        F_Ratio[Winsorizado]
+    )
+
+Desv_Sector =
+VAR s = F_Ratio[Sector]
+VAR f = F_Ratio[FamiliaID]
+RETURN
+    STDEVX.S (
+        FILTER (
+            ALL ( F_Ratio[Ticker], F_Ratio[Anio], F_Ratio[Sector], F_Ratio[FamiliaID], F_Ratio[Winsorizado] ),
+            F_Ratio[Sector] = s && F_Ratio[FamiliaID] = f
+        ),
+        F_Ratio[Winsorizado]
+    )
+
+Signo =
+VAR f = F_Ratio[FamiliaID]
+RETURN
+    IF (
+        F_Ratio[Sector] = "Financiero (bancos)",
+        LOOKUPVALUE ( Dim_Familia[Signo_Banco], Dim_Familia[FamiliaID], f ),
+        LOOKUPVALUE ( Dim_Familia[Signo_NoFin], Dim_Familia[FamiliaID], f )
+    )
+
+Z_Calculado =
+F_Ratio[Signo] * DIVIDE ( F_Ratio[Winsorizado] - F_Ratio[Media_Sector], F_Ratio[Desv_Sector] )
+
+Z_Cuadra =
+ABS ( F_Ratio[Z_Calculado] - F_Ratio[Z_Orientado] ) <= 0.000001
+
+// --- Recalculo del ratio desde las partidas (trazabilidad) ---
+
+Plantilla =
+LOOKUPVALUE ( Dim_Empresa[Plantilla], Dim_Empresa[Ticker], F_Ratio[Ticker] )
+
+Numerador_Recalc =
+VAR t  = F_Ratio[Ticker]
+VAR a  = F_Ratio[Anio]
+VAR f  = F_Ratio[FamiliaID]
+VAR pl = F_Ratio[Plantilla]
+RETURN
+    IF (
+        f = "F8_mercado_retorno",
+        LOOKUPVALUE ( F_Partida[Valor], F_Partida[Ticker], t, F_Partida[Anio], a, F_Partida[Campo], "precio_ajustado_cierre" ),
+        SUMX (
+            FILTER ( Puente_Ratio_Campo,
+                Puente_Ratio_Campo[Plantilla] = pl
+                    && Puente_Ratio_Campo[FamiliaID] = f
+                    && Puente_Ratio_Campo[Rol] = "Numerador" ),
+            VAR c = Puente_Ratio_Campo[Campo]
+            VAR v = LOOKUPVALUE ( F_Partida[Valor], F_Partida[Ticker], t, F_Partida[Anio], a, F_Partida[Campo], c )
+            RETURN Puente_Ratio_Campo[Signo] * IF ( Puente_Ratio_Campo[Absoluto], ABS ( v ), v )
+        )
+    )
+
+Denominador_Recalc =
+VAR t  = F_Ratio[Ticker]
+VAR a  = F_Ratio[Anio]
+VAR f  = F_Ratio[FamiliaID]
+VAR pl = F_Ratio[Plantilla]
+RETURN
+    IF (
+        f = "F8_mercado_retorno",
+        // precio del año anterior; para 2017, el precio al 31-12-2016 de Dim_Empresa
+        IF ( a = 2017,
+            LOOKUPVALUE ( Dim_Empresa[Precio2016], Dim_Empresa[Ticker], t ),
+            LOOKUPVALUE ( F_Partida[Valor], F_Partida[Ticker], t, F_Partida[Anio], a - 1, F_Partida[Campo], "precio_ajustado_cierre" ) ),
+        SUMX (
+            FILTER ( Puente_Ratio_Campo,
+                Puente_Ratio_Campo[Plantilla] = pl
+                    && Puente_Ratio_Campo[FamiliaID] = f
+                    && Puente_Ratio_Campo[Rol] = "Denominador" ),
+            VAR c = Puente_Ratio_Campo[Campo]
+            VAR v = LOOKUPVALUE ( F_Partida[Valor], F_Partida[Ticker], t, F_Partida[Anio], a, F_Partida[Campo], c )
+            RETURN Puente_Ratio_Campo[Signo] * IF ( Puente_Ratio_Campo[Absoluto], ABS ( v ), v )
+        )
+    )
+
+Ratio_Recalc =
+IF (
+    F_Ratio[FamiliaID] = "F8_mercado_retorno",
+    DIVIDE ( F_Ratio[Numerador_Recalc], F_Ratio[Denominador_Recalc] ) - 1,
+    DIVIDE ( F_Ratio[Numerador_Recalc], F_Ratio[Denominador_Recalc] )
+)
+
+Ratio_Cuadra =
+ABS ( F_Ratio[Ratio_Recalc] - F_Ratio[Valor] ) <= 0.000001 * MAX ( 1, ABS ( F_Ratio[Valor] ) )
+
+
+// =====================================================================
+//  B2) COLUMNAS CALCULADAS EN F_Dimensiones  (crear en este orden)
+// =====================================================================
+
+Resistencia =
+( F_Dimensiones[resistencia_s1] + F_Dimensiones[resistencia_s2] ) / 2
+
+Recuperacion =
+// promedio de los shocks con caída; vacía si la empresa no cayó en ninguno
+VAR r1 = F_Dimensiones[recuperacion_s1]
+VAR r2 = F_Dimensiones[recuperacion_s2]
+RETURN
+    SWITCH ( TRUE (),
+        ISBLANK ( r1 ) && ISBLANK ( r2 ), BLANK (),
+        ISBLANK ( r1 ), r2,
+        ISBLANK ( r2 ), r1,
+        ( r1 + r2 ) / 2 )
+
+Persistencia =
+F_Dimensiones[persistencia]
+
+Z_Resistencia =
+VAR T = ALL ( F_Dimensiones[Ticker], F_Dimensiones[Resistencia] )
+RETURN DIVIDE ( F_Dimensiones[Resistencia] - AVERAGEX ( T, F_Dimensiones[Resistencia] ),
+                STDEVX.S ( T, F_Dimensiones[Resistencia] ) )
+
+Z_Recuperacion =
+VAR T = FILTER ( ALL ( F_Dimensiones[Ticker], F_Dimensiones[Recuperacion] ), NOT ISBLANK ( F_Dimensiones[Recuperacion] ) )
+RETURN
+    IF ( ISBLANK ( F_Dimensiones[Recuperacion] ), BLANK (),
+        DIVIDE ( F_Dimensiones[Recuperacion] - AVERAGEX ( T, F_Dimensiones[Recuperacion] ),
+                 STDEVX.S ( T, F_Dimensiones[Recuperacion] ) ) )
+
+Z_Persistencia =
+VAR T = ALL ( F_Dimensiones[Ticker], F_Dimensiones[Persistencia] )
+RETURN DIVIDE ( F_Dimensiones[Persistencia] - AVERAGEX ( T, F_Dimensiones[Persistencia] ),
+                STDEVX.S ( T, F_Dimensiones[Persistencia] ) )
+
+Indice =
+VAR zr = F_Dimensiones[Z_Resistencia]
+VAR zc = F_Dimensiones[Z_Recuperacion]
+VAR zp = F_Dimensiones[Z_Persistencia]
+RETURN
+    IF ( ISBLANK ( zc ), ( zr + zp ) / 2, ( zr + zc + zp ) / 3 )
+
+Ranking =
+RANKX ( ALL ( F_Dimensiones[Ticker], F_Dimensiones[Indice] ), F_Dimensiones[Indice], , DESC )
+
+
+// =====================================================================
+//  C) MEDIDAS  (en la tabla _Medidas)
+// =====================================================================
+
+// ---------- KPI y semáforo ----------
+
+KPI Compuesto =
+AVERAGE ( F_KPI[KPI] )
+
+KPI Recalculado =
+// promedio de los z orientados del año: debe ser igual a [KPI Compuesto]
+AVERAGE ( F_Ratio[Z_Orientado] )
+
+KPI Sector =
+VAR sec = SELECTEDVALUE ( Dim_Empresa[Sector] )
+RETURN
+    CALCULATE ( [KPI Compuesto], REMOVEFILTERS ( Dim_Empresa ), Dim_Empresa[Sector] = sec )
+
+Media KPI Sector =
+// media del KPI del sector con los nueve ejercicios agrupados
+VAR sec = SELECTEDVALUE ( Dim_Empresa[Sector] )
+RETURN
+    CALCULATE ( AVERAGE ( F_KPI[KPI] ), REMOVEFILTERS ( Dim_Empresa ), REMOVEFILTERS ( Dim_Anio ), Dim_Empresa[Sector] = sec )
+
+Desv KPI Sector =
+VAR sec = SELECTEDVALUE ( Dim_Empresa[Sector] )
+RETURN
+    CALCULATE ( STDEV.S ( F_KPI[KPI] ), REMOVEFILTERS ( Dim_Empresa ), REMOVEFILTERS ( Dim_Anio ), Dim_Empresa[Sector] = sec )
+
+Z KPI Sectorial =
+IF (
+    HASONEVALUE ( Dim_Empresa[Ticker] ) && HASONEVALUE ( Dim_Anio[Anio] ),
+    DIVIDE ( [KPI Compuesto] - [Media KPI Sector], [Desv KPI Sector] )
+)
+
+Umbral Amarillo =
+// nivel de KPI bajo el cual la empresa pasa a amarillo (z = −1)
+[Media KPI Sector] - 1 * [Desv KPI Sector]
+
+Umbral Rojo =
+[Media KPI Sector] - 1.5 * [Desv KPI Sector]
+
+Alerta =
+VAR z = [Z KPI Sectorial]
+RETURN
+    SWITCH ( TRUE (),
+        ISBLANK ( z ), BLANK (),
+        z >= -1, "Verde",
+        z >= -1.5, "Amarillo",
+        "Rojo" )
+
+Color Alerta =
+SWITCH ( [Alerta],
+    "Verde", "#2E7D32",
+    "Amarillo", "#F9A825",
+    "Rojo", "#C62828",
+    "#9E9E9E" )
+
+Empresas por Alerta =
+// eje o leyenda: Dim_Semaforo[Categoria]; necesita un ejercicio en contexto
+VAR cat = SELECTEDVALUE ( Dim_Semaforo[Categoria] )
+RETURN
+    COUNTROWS ( FILTER ( VALUES ( Dim_Empresa[Ticker] ), [Alerta] = cat ) ) + 0
+
+Empresas en Verde =
+COUNTROWS ( FILTER ( VALUES ( Dim_Empresa[Ticker] ), [Alerta] = "Verde" ) ) + 0
+
+Empresas en Amarillo =
+COUNTROWS ( FILTER ( VALUES ( Dim_Empresa[Ticker] ), [Alerta] = "Amarillo" ) ) + 0
+
+Empresas en Rojo =
+COUNTROWS ( FILTER ( VALUES ( Dim_Empresa[Ticker] ), [Alerta] = "Rojo" ) ) + 0
+
+
+// ---------- Trayectoria ----------
+
+Pendiente Reciente =
+// pendiente de la recta del KPI en los últimos 3 ejercicios (por año)
+VAR a = MAX ( Dim_Anio[Anio] )
+VAR T =
+    ADDCOLUMNS (
+        FILTER ( ALL ( Dim_Anio[Anio] ), Dim_Anio[Anio] > a - 3 && Dim_Anio[Anio] <= a ),
+        "@y", [KPI Compuesto]
+    )
+VAR n  = COUNTROWS ( FILTER ( T, NOT ISBLANK ( [@y] ) ) )
+VAR mx = AVERAGEX ( T, Dim_Anio[Anio] )
+VAR my = AVERAGEX ( T, [@y] )
+VAR sxy = SUMX ( T, ( Dim_Anio[Anio] - mx ) * ( [@y] - my ) )
+VAR sxx = SUMX ( T, ( Dim_Anio[Anio] - mx ) ^ 2 )
+RETURN
+    IF ( HASONEVALUE ( Dim_Empresa[Ticker] ) && HASONEVALUE ( Dim_Anio[Anio] ) && n = 3, DIVIDE ( sxy, sxx ) )
+
+Trayectoria =
+VAR b = [Pendiente Reciente]
+VAR eps = 0.10
+RETURN
+    SWITCH ( TRUE (),
+        ISBLANK ( b ), "Sin dato",
+        b > eps, "Recuperándose",
+        b < -eps, "Empeorando",
+        "Estable" )
+
+Empresas por Trayectoria =
+// eje: Dim_Trayectoria[Categoria]
+VAR cat = SELECTEDVALUE ( Dim_Trayectoria[Categoria] )
+RETURN
+    COUNTROWS ( FILTER ( VALUES ( Dim_Empresa[Ticker] ), [Trayectoria] = cat ) ) + 0
+
+
+// ---------- Índice de resiliencia ----------
+
+Indice Resiliencia =
+// con una empresa: su índice; con un sector: el promedio del sector
+AVERAGE ( F_Dimensiones[Indice] )
+
+Ranking Indice =
+IF ( HASONEVALUE ( Dim_Empresa[Ticker] ), MIN ( F_Dimensiones[Ranking] ) )
+
+Z Resistencia = AVERAGE ( F_Dimensiones[Z_Resistencia] )
+Z Recuperacion = AVERAGE ( F_Dimensiones[Z_Recuperacion] )
+Z Persistencia = AVERAGE ( F_Dimensiones[Z_Persistencia] )
+
+
+// ---------- Familias y dispersión sectorial ----------
+// Visual sugerido para la vista sectorial: matriz con Dim_Empresa[SectorCorto]
+// en filas, Dim_Familia[Familia] en columnas y un ejercicio en el filtro.
+
+Ratio = AVERAGE ( F_Ratio[Valor] )
+Ratio Winsorizado = AVERAGE ( F_Ratio[Winsorizado] )
+Z Familia = AVERAGE ( F_Ratio[Z_Orientado] )
+
+Familia Minimo  = MIN ( F_Ratio[Winsorizado] )
+Familia P25     = PERCENTILE.INC ( F_Ratio[Winsorizado], 0.25 )
+Familia Mediana = MEDIAN ( F_Ratio[Winsorizado] )
+Familia P75     = PERCENTILE.INC ( F_Ratio[Winsorizado], 0.75 )
+Familia Maximo  = MAX ( F_Ratio[Winsorizado] )
+Familia RIQ     = [Familia P75] - [Familia P25]
+
+
+// ---------- Trazabilidad ----------
+
+Numerador Recalculado   = SUM ( F_Ratio[Numerador_Recalc] )
+Denominador Recalculado = SUM ( F_Ratio[Denominador_Recalc] )
+Ratio Recalculado       = AVERAGE ( F_Ratio[Ratio_Recalc] )
+
+Control Trazabilidad =
+IF ( HASONEVALUE ( F_Ratio[FamiliaID] ) && HASONEVALUE ( Dim_Empresa[Ticker] ) && HASONEVALUE ( Dim_Anio[Anio] ),
+    IF ( SELECTEDVALUE ( F_Ratio[Ratio_Cuadra] ), "Cuadra", "Revisar" ) )
+
+Ratios Comparados = COUNTROWS ( F_Ratio )
+Ratios que Cuadran = CALCULATE ( COUNTROWS ( F_Ratio ), F_Ratio[Ratio_Cuadra] = TRUE () ) + 0
+Z que Cuadran      = CALCULATE ( COUNTROWS ( F_Ratio ), F_Ratio[Z_Cuadra] = TRUE () ) + 0
+
+Texto Control =
+FORMAT ( [Ratios que Cuadran], "#,0" ) & " de " & FORMAT ( [Ratios Comparados], "#,0" )
+    & " ratios recalculados desde las partidas cuadran con la base"
+
+// Para la tabla de origen (vista 4): tabla con F_Partida[Campo], [PartidaCMF],
+// [ElementoIFRS], [Anio], [Valor], [Fuente], filtrada por empresa y ejercicio,
+// y un filtro de nivel visual con esta medida = 1 para ver solo las partidas
+// de la familia elegida en el segmentador de Dim_Familia:
+Partida en Familia =
+VAR f  = SELECTEDVALUE ( Dim_Familia[FamiliaID] )
+VAR pl = SELECTEDVALUE ( F_Partida[Plantilla] )
+VAR c  = SELECTEDVALUE ( F_Partida[Campo] )
+RETURN
+    IF ( ISBLANK ( f ), 1,
+        IF ( COUNTROWS ( FILTER ( Puente_Ratio_Campo,
+                Puente_Ratio_Campo[FamiliaID] = f && Puente_Ratio_Campo[Campo] = c
+                    && ( Puente_Ratio_Campo[Plantilla] = pl ) ) ) > 0, 1, 0 ) )
+// Nota: con F8 Mercado la tabla muestra el precio del año; el del año
+// anterior aparece al elegir ese ejercicio (en 2017, Dim_Empresa[Precio2016]).
+
+
+// ---------- Serie bursátil ----------
+
+Base 100 = AVERAGE ( F_Bolsa_Mensual[Base100] )
+Precio Ajustado = AVERAGE ( F_Bolsa_Mensual[PrecioAjustado] )
+Mayor Caida = MIN ( F_Bolsa_Mensual[Drawdown] )
+
+
+// =====================================================================
+//  D) COMPROBACIÓN  (deben salir estos valores)
+// ---------------------------------------------------------------------
+//  • Tarjeta [Texto Control] sin filtros: "1.548 de 1.548 ...".
+//  • Tarjeta [Z que Cuadran] sin filtros: 1.548.
+//  • Tabla Ticker × Anio con [KPI Compuesto] y [KPI Recalculado]: iguales.
+//  • Tabla Ticker × Anio con [Z KPI Sectorial], [Alerta], [Pendiente
+//    Reciente] y [Trayectoria]: iguales a la hoja Control_Anual.
+//  • Tabla Ticker con [Indice Resiliencia] y [Ranking Indice]: iguales a
+//    Control_Indice (1.º ANDINA-B 1,71; 22.º CCU −1,32).
+//  • Gráfico de columnas apiladas: eje Dim_Anio[Anio], leyenda
+//    Dim_Semaforo[Categoria], valor [Empresas por Alerta]:
+//    2020 → 17 verde, 1 amarillo, 4 rojo; 2025 → 22 verde.
+// =====================================================================
